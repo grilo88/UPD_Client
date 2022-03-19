@@ -26,18 +26,24 @@ namespace UPD_Client
         CancellationTokenSource _cts;
 
         int _FPS = 0;
-        int _FPS_count = 0;
+        volatile int _FPS_count = 0;
         int _FPS_tick = Environment.TickCount;
 
         public int FPS { get => _FPS; }
+
+        bool _udp = false;
+        bool _tcp = false;
 
         public BroadcastClient()
         {
             _pingSend = new byte[1] { 1 };
         }
 
-        internal async Task ConnectChannel(string host, int port)
+        internal async Task ConnectChannel(string host, int port, bool udp = false)
         {
+            _udp = udp;
+            _tcp = !udp;
+
             try
             {
                 _cts = new CancellationTokenSource();
@@ -50,12 +56,19 @@ namespace UPD_Client
                 }
                 
                 _ep = new(_ip, port);
-                _socket = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-                _socket.EnableBroadcast = true;
+
+                if (_udp)
+                {
+                    _socket = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                }
+                else if (_tcp)
+                    _socket = new(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+                else
+                    throw new NotImplementedException();
 
                 await _socket.ConnectAsync(_ep, _cts.Token);
 
-                int threads = 1;
+                int threads = 20;
 
                 Task[] task = new Task[threads];
                 for (int i = 0; i < 1; i++)
@@ -133,11 +146,28 @@ namespace UPD_Client
 
         //    _socket.SendTo(buffer, _ep);
         //}
-        
+
+
+        byte[] _largeData = new byte[50000];
+
+        internal async Task SendLargeData(string channel)
+        {
+            try
+            {
+                ArraySegment<byte> segment = new(_largeData, 0, _largeData.Length);
+                await _socket.SendToAsync(segment, SocketFlags.None, _ep, _cts.Token);
+                CalcFPSBytes(_largeData.Length);
+                //CalcFPS();
+            }
+            catch (Exception ex)
+            {
+
+            }
+        }
 
         internal void SendMessage3(string msg, string channel)
         {
-            _socket.SendTo(_pingSend, _ep);
+            _socket.SendTo(UTF8Encoding.UTF8.GetBytes(msg), _ep);
             CalcFPS();
         }
 
@@ -173,6 +203,41 @@ namespace UPD_Client
         private void SerializePacket(string channel, string msg)
         {
 
+        }
+
+        public static class FileSizeFormatter
+        {
+            // Load all suffixes in an array  
+            static readonly string[] suffixes =
+            { "Bytes", "KB", "MB", "GB", "TB", "PB" };
+            public static string FormatSize(Int64 bytes)
+            {
+                int counter = 0;
+                decimal number = (decimal)bytes;
+                while (Math.Round(number / 1024) >= 1)
+                {
+                    number = number / 1024;
+                    counter++;
+                }
+                return string.Format("{0:n1}{1}", number, suffixes[counter]);
+            }
+        }
+
+        private void CalcFPSBytes(int count)
+        {
+            if (Environment.TickCount - _FPS_tick >= 1000)
+            {
+                _FPS = _FPS_count;
+                _FPS_count = 0;
+                _FPS_tick = Environment.TickCount;
+
+                string size = FileSizeFormatter.FormatSize(_FPS);
+
+                Debug.Print($"Size: {size}");
+                Console.WriteLine($"Size: {size}");
+            }
+            //Interlocked.And(ref _FPS_count, count);
+            _FPS_count += count;
         }
 
         private void CalcFPS()
